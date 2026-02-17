@@ -1,0 +1,41 @@
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Environment variables (NEVER commit!)
+.env
+
+# Database files
+chroma_db/
+*.db
+*.sqlite
+
+# Audio files
+*.wav
+*.mp3
+output.wav
+
+# VS Code
+.vscode/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test files
+test_groq.py
+test_deepgram.py
+
+# Large model files
+*.bin
+*.pt
+*.onnx
