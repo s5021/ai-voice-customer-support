@@ -172,7 +172,7 @@ async function sendTextMessage() {
         
         sessionId = data.session_id;
         
-        addMessage(data.response, 'bot');
+        addMessageWithSources(data.response, 'bot', data.rag_sources);
         
     } catch (error) {
         console.error('Error sending message:', error);
@@ -193,6 +193,29 @@ function addMessage(text, sender) {
     messageDiv.appendChild(contentDiv);
     chatContainer.appendChild(messageDiv);
     
+    chatContainer.scrollTop = chatContainer.scrollHeight;
+}
+
+function addMessageWithSources(text, sender, sources) {
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `chat-message ${sender}-message`;
+    
+    const contentDiv = document.createElement('div');
+    contentDiv.className = 'message-content';
+    
+    const label = sender === 'user' ? 'You' : 'AI Assistant';
+    let html = `<strong>${label}:</strong> ${text}`;
+    
+    // Add RAG sources if available
+    if (sources && sources.length > 0) {
+        html += `<div class="rag-sources">
+            <small>📚 Sources: ${sources.join(', ')}</small>
+        </div>`;
+    }
+    
+    contentDiv.innerHTML = html;
+    messageDiv.appendChild(contentDiv);
+    chatContainer.appendChild(messageDiv);
     chatContainer.scrollTop = chatContainer.scrollHeight;
 }
 
@@ -282,3 +305,54 @@ async function loadAnalytics() {
 }
 
 setInterval(loadAnalytics, 30000);
+
+// Document upload
+document.getElementById('uploadBtn').addEventListener('click', async () => {
+    const fileInput = document.getElementById('docUpload');
+    const file = fileInput.files[0];
+    const status = document.getElementById('uploadStatus');
+    
+    if (!file) {
+        status.innerHTML = '<p style="color:red">Please select a file!</p>';
+        return;
+    }
+    
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    status.innerHTML = '<p>Uploading...</p>';
+    
+    try {
+        const response = await fetch('/api/upload-doc', {
+            method: 'POST',
+            body: formData
+        });
+        
+        const data = await response.json();
+        
+        if (data.error) {
+            status.innerHTML = `<p style="color:red">${data.error}</p>`;
+        } else {
+            status.innerHTML = `<p style="color:green">✅ ${data.message}</p>`;
+        }
+    } catch (error) {
+        status.innerHTML = '<p style="color:red">Upload failed!</p>';
+    }
+});
+
+// Reload knowledge base
+document.getElementById('reloadKbBtn').addEventListener('click', async () => {
+    const status = document.getElementById('uploadStatus');
+    status.innerHTML = '<p>Reloading knowledge base...</p>';
+    
+    try {
+        const response = await fetch('/api/reload-knowledge-base', {
+            method: 'POST'
+        });
+        const data = await response.json();
+        const message = data.message || 'Knowledge base reloaded successfully!';
+        status.innerHTML = `<p style="color:green">✅ ${message}</p>`;
+    } catch (error) {
+        status.innerHTML = '<p style="color:red">Reload failed!</p>';
+    }
+});
