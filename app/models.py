@@ -2,31 +2,34 @@
 from datetime import datetime
 db = SQLAlchemy()
 class Customer(db.Model):
-    __tablename__ = 'customers'
+    __tablename__ = 'voicebot_customers'  # Ye line add karo
+    
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
     phone = db.Column(db.String(20))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    # Relationship
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    
     orders = db.relationship('Order', backref='customer', lazy=True)
+    
     def to_dict(self):
         return {
             'id': self.id,
             'name': self.name,
             'email': self.email,
-            'phone': self.phone,
-            'created_at': self.created_at.isoformat()
+            'phone': self.phone
         }
 class Order(db.Model):
-    __tablename__ = 'orders'
+    __tablename__ = 'voicebot_orders'  # Ye line add karo
+    
     id = db.Column(db.Integer, primary_key=True)
-    customer_id = db.Column(db.Integer, db.ForeignKey('customers.id'), nullable=False)
+    customer_id = db.Column(db.Integer, db.ForeignKey('voicebot_customers.id'), nullable=False)
     order_number = db.Column(db.String(50), unique=True, nullable=False)
     product_name = db.Column(db.String(200), nullable=False)
     amount = db.Column(db.Float, nullable=False)
-    status = db.Column(db.String(50), default='pending')
-    order_date = db.Column(db.DateTime, default=datetime.utcnow)
+    status = db.Column(db.String(50), nullable=False)
+    order_date = db.Column(db.DateTime, default=db.func.now())
+    
     def to_dict(self):
         return {
             'id': self.id,
@@ -35,7 +38,7 @@ class Order(db.Model):
             'product_name': self.product_name,
             'amount': self.amount,
             'status': self.status,
-            'order_date': self.order_date.isoformat()
+            'order_date': self.order_date.isoformat() if self.order_date else None
         }
 def init_db(app):
     """Initialize database with sample data"""
