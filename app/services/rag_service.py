@@ -11,33 +11,60 @@ class RAGService:
         self.groq_api_key = groq_api_key
         self.docs_path = docs_path
         self.db_path = db_path
-        self.vectorstore = None
-        self.qa_chain = None
         
-        # Initialize embeddings
-        print("Loading embeddings model...")
-        self.embeddings = HuggingFaceEmbeddings(
-            model_name="all-MiniLM-L6-v2",
-            model_kwargs={'device': 'cpu'}
-        )
+        # Lazy loading - don't initialize these at startup
+        self._embeddings = None
+        self._vectorstore = None
+        self._qa_chain = None
+        self._llm = None
         
-        # Initialize LLM
-        self.llm = ChatGroq(
-            groq_api_key=groq_api_key,
-            model_name="llama-3.3-70b-versatile",
-            temperature=0.3,
-            max_tokens=500
-        )
-        
-        # Load or create vector store
-        self._initialize_vectorstore()
+        print("RAGService initialized (lazy loading enabled)")
+    
+    @property
+    def embeddings(self):
+        """Lazy load embeddings only when first needed"""
+        if self._embeddings is None:
+            print("Loading embeddings model (on-demand)...")
+            self._embeddings = HuggingFaceEmbeddings(
+                model_name="all-MiniLM-L6-v2",
+                model_kwargs={'device': 'cpu'}
+            )
+            print("Embeddings loaded!")
+        return self._embeddings
+    
+    @property
+    def llm(self):
+        """Lazy load LLM only when first needed"""
+        if self._llm is None:
+            print("Initializing LLM...")
+            self._llm = ChatGroq(
+                groq_api_key=self.groq_api_key,
+                model_name="llama-3.3-70b-versatile",
+                temperature=0.3,
+                max_tokens=500
+            )
+        return self._llm
+    
+    @property
+    def vectorstore(self):
+        """Lazy load vectorstore only when first needed"""
+        if self._vectorstore is None:
+            self._initialize_vectorstore()
+        return self._vectorstore
+    
+    @property
+    def qa_chain(self):
+        """Lazy load QA chain only when first needed"""
+        if self._qa_chain is None:
+            self._create_qa_chain()
+        return self._qa_chain
     
     def _initialize_vectorstore(self):
         """Load existing vectorstore or create new one"""
         try:
             if os.path.exists(self.db_path) and os.listdir(self.db_path):
                 print("Loading existing knowledge base...")
-                self.vectorstore = Chroma(
+                self._vectorstore = Chroma(
                     persist_directory=self.db_path,
                     embedding_function=self.embeddings
                 )
@@ -45,9 +72,6 @@ class RAGService:
             else:
                 print("Creating new knowledge base...")
                 self._create_vectorstore()
-            
-            # Create QA chain
-            self._create_qa_chain()
             
         except Exception as e:
             print(f"Error initializing vectorstore: {e}")
@@ -85,12 +109,12 @@ class RAGService:
             print(f"Created {len(chunks)} chunks")
             
             # Create vector store
-            self.vectorstore = Chroma.from_documents(
+            self._vectorstore = Chroma.from_documents(
                 documents=chunks,
                 embedding=self.embeddings,
                 persist_directory=self.db_path
             )
-            self.vectorstore.persist()
+            self._vectorstore.persist()
             print("Knowledge base created and saved!")
             
         except Exception as e:
@@ -99,14 +123,17 @@ class RAGService:
     def _create_qa_chain(self):
         """Create QA retrieval chain"""
         try:
-            if self.vectorstore is None:
+            if self._vectorstore is None:
+                self._initialize_vectorstore()
+            
+            if self._vectorstore is None:
                 return
             
-            retriever = self.vectorstore.as_retriever(
+            retriever = self._vectorstore.as_retriever(
                 search_kwargs={"k": 3}
             )
             
-            self.qa_chain = RetrievalQA.from_chain_type(
+            self._qa_chain = RetrievalQA.from_chain_type(
                 llm=self.llm,
                 chain_type="stuff",
                 retriever=retriever,
@@ -129,6 +156,7 @@ class RAGService:
             dict with answer and sources
         """
         try:
+            # This will trigger lazy loading on first use
             if self.qa_chain is None:
                 return {
                     "answer": "Knowledge base not available.",
@@ -185,6 +213,7 @@ class RAGService:
             )
             chunks = text_splitter.split_documents(documents)
             
+            # This will trigger lazy loading if not already loaded
             if self.vectorstore:
                 self.vectorstore.add_documents(chunks)
                 self.vectorstore.persist()
@@ -202,6 +231,8 @@ class RAGService:
             import shutil
             if os.path.exists(self.db_path):
                 shutil.rmtree(self.db_path)
+            self._vectorstore = None
+            self._qa_chain = None
             self._create_vectorstore()
             self._create_qa_chain()
             return True
