@@ -1,18 +1,33 @@
-﻿from flask import Blueprint, request, jsonify, render_template
+﻿from flask import Blueprint, request, jsonify, render_template, current_app
 from app.models import Customer, Order
-from app.services import DeepgramService, GroqService, AnalyticsService, RAGService
+from app.services import DeepgramService, GroqService, AnalyticsService
 from app.config import Config
 import uuid
 import os
 
 api = Blueprint('api', __name__)
 
-deepgram_service = DeepgramService(Config.DEEPGRAM_API_KEY)
-groq_service = GroqService(Config.GROQ_API_KEY, Config.GROQ_MODEL)
-analytics_service = AnalyticsService(Config.MONGODB_URI, Config.MONGODB_DB_NAME)
-rag_service = RAGService(Config.GROQ_API_KEY)
+# Helper functions to get services lazily
+def get_deepgram_service():
+    if not hasattr(current_app, '_deepgram'):
+        current_app._deepgram = DeepgramService(Config.DEEPGRAM_API_KEY)
+    return current_app._deepgram
 
-sessions = {}
+def get_groq_service():
+    if not hasattr(current_app, '_groq'):
+        current_app._groq = GroqService(Config.GROQ_API_KEY, Config.GROQ_MODEL)
+    return current_app._groq
+
+def get_analytics_service():
+    if not hasattr(current_app, '_analytics'):
+        try:
+            current_app._analytics = AnalyticsService(Config.MONGODB_URI, Config.MONGODB_DB_NAME)
+        except:
+            current_app._analytics = None
+    return current_app._analytics
+
+def get_rag_service():
+    return current_app.rag_service if hasattr(current_app, 'rag_service') else None
 
 
 @api.route('/')
@@ -29,7 +44,8 @@ def transcribe():
         if not audio_data:
             return jsonify({'error': 'No audio data provided'}), 400
 
-        transcript = deepgram_service.transcribe_audio(audio_data)
+        deepgram = get_deepgram_service()
+        transcript = deepgram.transcribe_audio(audio_data)
 
         if transcript is None:
             return jsonify({'error': 'Failed to transcribe audio'}), 500
@@ -37,6 +53,7 @@ def transcribe():
         return jsonify({'text': transcript})
 
     except Exception as e:
+        print(f"Transcribe error: {e}")
         return jsonify({'error': str(e)}), 500
 
 
@@ -52,37 +69,62 @@ def chat():
         if not user_message:
             return jsonify({'error': 'No message provided'}), 400
 
-        rag_result = rag_service.query(user_message)
+        print(f"📨 Chat request: {user_message}")
+
+        # Try RAG
         rag_context = None
         rag_sources = []
+        used_rag = False
+        
+        rag_service = get_rag_service()
+        if rag_service:
+            try:
+                print("🔍 Querying RAG...")
+                rag_result = rag_service.query(user_message)
+                if rag_result["used_rag"] and rag_result["answer"]:
+                    rag_context = rag_result["answer"]
+                    rag_sources = rag_result["sources"]
+                    used_rag = True
+                    print(f"✅ RAG answered: {used_rag}")
+            except Exception as e:
+                print(f"⚠️ RAG error: {e}")
 
-        if rag_result["used_rag"] and rag_result["answer"]:
-            rag_context = rag_result["answer"]
-            rag_sources = rag_result["sources"]
-
-        response = groq_service.chat(
+        # Get Groq response
+        groq = get_groq_service()
+        response = groq.chat(
             user_message,
             customer_email=customer_email,
             order_number=order_number,
             rag_context=rag_context
         )
 
-        analytics_service.log_conversation(
-            session_id=session_id,
-            user_input=user_message,
-            bot_response=response,
-            customer_email=customer_email
-        )
+        print(f"✅ Response generated")
+
+        # Try to log analytics (but don't fail if it doesn't work)
+        try:
+            analytics = get_analytics_service()
+            if analytics:
+                analytics.log_conversation(
+                    session_id=session_id,
+                    user_input=user_message,
+                    bot_response=response,
+                    customer_email=customer_email
+                )
+        except Exception as e:
+            print(f"⚠️ Analytics logging failed: {e}")
 
         return jsonify({
             'response': response,
             'session_id': session_id,
             'rag_sources': rag_sources,
-            'used_rag': rag_result["used_rag"]
+            'used_rag': used_rag
         })
 
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        print(f"❌ Chat error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Processing error: {str(e)}'}), 500
 
 
 @api.route('/api/synthesize', methods=['POST'])
@@ -94,7 +136,8 @@ def synthesize():
         if not text:
             return jsonify({'error': 'No text provided'}), 400
 
-        audio_data = deepgram_service.synthesize_speech(text)
+        deepgram = get_deepgram_service()
+        audio_data = deepgram.synthesize_speech(text)
 
         if audio_data is None:
             return jsonify({'error': 'Failed to synthesize speech'}), 500
@@ -102,6 +145,7 @@ def synthesize():
         return jsonify({'audio': audio_data})
 
     except Exception as e:
+        print(f"Synthesize error: {e}")
         return jsonify({'error': str(e)}), 500
 
 
@@ -165,8 +209,15 @@ def get_order(order_number):
 @api.route('/api/analytics', methods=['GET'])
 def get_analytics():
     try:
-        summary = analytics_service.get_analytics_summary()
-        recent = analytics_service.get_recent_conversations(limit=5)
+        analytics = get_analytics_service()
+        if not analytics:
+            return jsonify({
+                'summary': {'total_conversations': 0, 'total_sessions': 0},
+                'recent_conversations': []
+            })
+        
+        summary = analytics.get_analytics_summary()
+        recent = analytics.get_recent_conversations(limit=5)
 
         return jsonify({
             'summary': summary,
@@ -174,7 +225,11 @@ def get_analytics():
         })
 
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        print(f"Analytics error: {e}")
+        return jsonify({
+            'summary': {'total_conversations': 0, 'total_sessions': 0},
+            'recent_conversations': []
+        })
 
 
 @api.route('/api/upload-doc', methods=['POST'])
@@ -190,6 +245,10 @@ def upload_document():
 
         filepath = os.path.join('knowledge_base/docs', file.filename)
         file.save(filepath)
+
+        rag_service = get_rag_service()
+        if not rag_service:
+            return jsonify({'error': 'RAG service not available'}), 500
 
         success = rag_service.add_document(filepath)
 
@@ -207,6 +266,10 @@ def upload_document():
 @api.route('/api/reload-knowledge-base', methods=['POST'])
 def reload_knowledge_base():
     try:
+        rag_service = get_rag_service()
+        if not rag_service:
+            return jsonify({'error': 'RAG service not available'}), 500
+            
         success = rag_service.reload_knowledge_base()
         if success:
             return jsonify({'message': 'Knowledge base reloaded!'})
@@ -220,7 +283,8 @@ def reload_knowledge_base():
 @api.route('/api/reset', methods=['POST'])
 def reset_conversation():
     try:
-        groq_service.reset_conversation()
+        groq = get_groq_service()
+        groq.reset_conversation()
         return jsonify({'message': 'Conversation reset successfully'})
 
     except Exception as e:
